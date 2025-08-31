@@ -9,6 +9,8 @@ import { Redis } from '@upstash/redis'
 
 const app = express()
 const PORT = 3001
+const getRedisUser= (id)=>`user:status:${id}`
+const getBusyCacheKey =(id)=>`${id}:busy`
 const httpServer = createServer(app)
 const io = new Server(httpServer, {
   cors: { 
@@ -50,7 +52,16 @@ io.on("connection", async (socket) => {
   //user presence login
 
   //emit users status to all listners on join
-  await redis.set(`user:status:${userId}`, true)
+  await redis.set(`user:status:${userId}`, {
+    online:true,
+    isBusy:false,
+    socketId:socket.id
+  })
+  console.log( {
+    online:true,
+    isBusy:false,
+    socketId:socket.id
+  })
   socket.join(userId)
    io.to(userId).emit("online:status:"+userId, {
       userId,
@@ -58,9 +69,10 @@ io.on("connection", async (socket) => {
     })
 //join a user status
   socket.on("join:status", async (targetId, callback) => {
+    
     socket.join(targetId)
     const status = await redis.get(`user:status:${targetId}`)
-    const isOnline = status === "true" || status === true
+    const isOnline = status.online
     io.to(targetId).emit("online:status:"+targetId, {
       targetId,
       online: isOnline
@@ -69,18 +81,29 @@ io.on("connection", async (socket) => {
 
 //update and emit the user status
   socket.on("update:status", async (data) => {
-    await redis.set(`user:status:${userId}`, data)
+     await redis.set(`user:status:${userId}`, {
+    online:data,
+    isBusy:false,
+    socketId:socket.id
+  })
+    io.to(userId).emit("online:status:"+userId, {
+    online:data,
+    isBusy:false,
+  })
+  })
+ socket.on("disconnect", async() => {
+  await redis.del(userId)
     io.to(userId).emit("online:status:"+userId, {
       userId,
-      online: data
+      online: false,
     })
-  })
+});
 
     //chat room logic
     socket.on("join:chat",(data)=>{
       socket.join(data)
     })
-  socket.on("send:chat:message",(data)=>{
+  socket.on("send:chat:message",(data)=>{k
    io.to(data.chat_id).emit(`chat:message:${data.chat_id}`,data)
   })
 
@@ -91,16 +114,45 @@ io.on("connection", async (socket) => {
   socket.on("chat:input:blur",(data)=>{
     io.to(data).emit("chat:input:blur:"+data,socket.data.user_id)
   })
-  socket.on("disconnect", async () => {
-    await redis.set(`user:status:${userId}`, false)
+  //call logic
+  socket.on("initialize:call",async({id,info})=>{
+    const status = await redis.get(getRedisUser(id))
+  
+    if(status.isBusy){
+      console.log('busy')
+      socket.emit(`busy:${id}`,status)
+    }
+    socket.join(info.call_id)
+    io.to(status.socketId).emit(`${id}:ring`,info)
+  });
 
-    io.to(userId).emit("online:status:"+userId, {
-      userId,
-      online: false,
-    })
+  socket.on("join:call",(data)=>{
+    socket.join(data)
+    io.to(data).emit(data+"joined:call")
   })
-})
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  })
 app.use(clerkMiddleware())
 
 app.get('/', (req, res) => {
